@@ -74,7 +74,7 @@ To use profiles, run:
 python chat.py --profile {filename}.json
 ```
 
-I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. You can create your own profiles by modifying the JSON files in the `profiles` directory.
+I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. You can create your own profiles by modifying the JSON files.
 
 ## Supported Models
 OpenAssistant uses LiteLLM to support a wide range of language models. You can choose any model that supports function calling. Some examples include:
