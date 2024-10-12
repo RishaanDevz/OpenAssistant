@@ -1,13 +1,10 @@
 # OpenAssistant 🤖
-
-Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles and extensible client support.
+Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles, extensible client support, and flexible model selection.
 
 ## Overview 🌟
-
 OpenAssistant is a flexible AI assistant platform designed to provide intelligent responses, perform calculations, and access various data sources. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces.
 
 ## Endpoints 🔌
-
 ### 1. `/connect` (POST)
 Establishes a connection between the client and the OpenAssistant server.
 
@@ -15,11 +12,9 @@ Establishes a connection between the client and the OpenAssistant server.
 Processes user input and generates AI responses. This endpoint supports streaming for real-time interaction.
 
 ## Profiles 🎭
-
 Profiles in OpenAssistant allow for customization of the AI's capabilities and personality.
 
 ### Profile Components:
-
 1. **Tools** 🛠️
    - Weather: Provides current weather information
    - Wolfram Alpha: Performs complex calculations and provides factual data
@@ -28,16 +23,14 @@ Profiles in OpenAssistant allow for customization of the AI's capabilities and p
 2. **Personality** 💬
    - Customizable system prompt to tailor the AI's behavior and knowledge base
 
+
 ## Custom Client Development 🖥️
-
 OpenAssistant supports the development of custom client interfaces:
-
 1. Connect to the server (default: `http://localhost:5000`)
 2. Send POST requests to `/generate` with the message and conversation history
 3. Handle streaming responses for real-time interaction
 
 ## Installation and Setup 🚀
-
 Follow these steps to set up and run OpenAssistant:
 
 1. Clone the repository:
@@ -54,11 +47,14 @@ Follow these steps to set up and run OpenAssistant:
 3. Set up environment variables:
    Create a `.env` file in the project root and add your API keys:
    ```
-   GEMINI_API_KEY=your_gemini_api_key
+   OPENAI_API_KEY=your_openai_api_key
+   ANTHROPIC_API_KEY=your_anthropic_api_key
    GOOGLE_API_KEY=your_google_api_key
    GOOGLE_CSE_ID=your_google_cse_id
    WOLFRAM_ALPHA_APP_ID=your_wolfram_alpha_app_id
+   GEMINI_API_KEY=your_gemini_api_key
    ```
+   Add any other API keys required for the models you want to use.
 
 4. Run the OpenAssistant server:
    ```
@@ -73,10 +69,26 @@ Follow these steps to set up and run OpenAssistant:
 You can now interact with OpenAssistant through the chat interface!
 
 ## How to use Profiles
-
-To use profiles, it's as simple as running the main.py file, then running
+To use profiles, run:
 ```
 python chat.py --profile {filename}.json
 ```
 
-I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. 
+I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. You can create your own profiles by modifying the JSON files in the `profiles` directory.
+
+## Supported Models
+OpenAssistant uses LiteLLM to support a wide range of language models. You can choose any model that supports function calling. Some examples include:
+
+- OpenAI models (e.g., gpt-3.5-turbo, gpt-4)
+- Anthropic models (e.g., claude-2, claude-instant-1)
+- Azure OpenAI models
+- Cohere models
+- AI21 models
+- Google Gemini models
+- And many more!
+
+To change the model, you need to modify the `main.py` file directly. Look for the section where the model is defined and update it with your desired model.
+
+For a full list of supported models and their configurations, please refer to the [LiteLLM documentation](https://docs.litellm.ai/docs/providers).
+
+Note: Make sure you have the appropriate API keys set up in your `.env` file for the model you want to use.
