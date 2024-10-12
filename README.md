@@ -1,1 +1,82 @@
-# OpenAssistant
+# OpenAssistant 🤖
+
+Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles and extensible client support.
+
+## Overview 🌟
+
+OpenAssistant is a flexible AI assistant platform designed to provide intelligent responses, perform calculations, and access various data sources. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces.
+
+## Endpoints 🔌
+
+### 1. `/connect` (POST)
+Establishes a connection between the client and the OpenAssistant server.
+
+### 2. `/generate` (POST)
+Processes user input and generates AI responses. This endpoint supports streaming for real-time interaction.
+
+## Profiles 🎭
+
+Profiles in OpenAssistant allow for customization of the AI's capabilities and personality.
+
+### Profile Components:
+
+1. **Tools** 🛠️
+   - Weather: Provides current weather information
+   - Wolfram Alpha: Performs complex calculations and provides factual data
+   - Google Search: Searches and summarizes web content
+
+2. **Personality** 💬
+   - Customizable system prompt to tailor the AI's behavior and knowledge base
+
+## Custom Client Development 🖥️
+
+OpenAssistant supports the development of custom client interfaces:
+
+1. Connect to the server (default: `http://localhost:5000`)
+2. Send POST requests to `/generate` with the message and conversation history
+3. Handle streaming responses for real-time interaction
+
+## Installation and Setup 🚀
+
+Follow these steps to set up and run OpenAssistant:
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/RishaanDevz/OpenAssistant.git
+   cd OpenAssistant
+   ```
+
+2. Install the required Python libraries:
+   ```
+   pip install flask requests wolframalpha google-api-python-client beautifulsoup4 python-dotenv litellm rich
+   ```
+
+3. Set up environment variables:
+   Create a `.env` file in the project root and add your API keys:
+   ```
+   GEMINI_API_KEY=your_gemini_api_key
+   GOOGLE_API_KEY=your_google_api_key
+   GOOGLE_CSE_ID=your_google_cse_id
+   WOLFRAM_ALPHA_APP_ID=your_wolfram_alpha_app_id
+   ```
+
+4. Run the OpenAssistant server:
+   ```
+   python main.py
+   ```
+
+5. In a new terminal window, run the chat interface:
+   ```
+   python chat.py
+   ```
+   
+You can now interact with OpenAssistant through the chat interface!
+
+## How to use Profiles
+
+To use profiles, it's as simple as running the main.py file, then running
+```
+python chat.py --profile {filename}.json
+```
+
+I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. 
