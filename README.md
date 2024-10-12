@@ -1,3 +1,5 @@
+![alt text](https://ibb.co/v37B4Sm)
+
 # OpenAssistant 🤖
 Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles, extensible client support, and flexible model selection.
 
