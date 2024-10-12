@@ -79,11 +79,10 @@ I've included some profiles, such as Captain Data, Jake from State Farm, and Ale
 ## Supported Models
 OpenAssistant uses LiteLLM to support a wide range of language models. You can choose any model that supports function calling. Some examples include:
 
-- OpenAI models (e.g., gpt-3.5-turbo, gpt-4)
-- Anthropic models (e.g., claude-2, claude-instant-1)
+- OpenAI models (e.g., gpt-4o-mini, gpt-4o)
+- Anthropic models (e.g., claude-3.5-sonnet, claude-3-opus)
 - Azure OpenAI models
 - Cohere models
-- AI21 models
 - Google Gemini models
 - And many more!
 
