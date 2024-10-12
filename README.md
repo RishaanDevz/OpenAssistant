@@ -1,4 +1,4 @@
-![alt text](https://github.com/RishaanDevz/OpenAssistant/blob/main/Untitled%20design%20(13).png)
+![alt text](https://github.com/RishaanDevz/OpenAssistant/blob/main/Untitled%20design%20(12).png)
 
 # OpenAssistant 🤖
 Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles, extensible client support, and flexible model selection.
