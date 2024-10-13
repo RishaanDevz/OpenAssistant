@@ -8,6 +8,10 @@ from typing import Dict, List
 import json
 import argparse
 import os
+import pygame
+import io
+import threading
+import atexit
 
 console = Console()
 
@@ -15,27 +19,41 @@ class ChatInterface:
     def __init__(self, profile_path: str = None):
         self.conversation: List[Dict[str, str]] = []
         self.base_url = 'http://localhost:5000'
-        self.profile = self.load_profile(profile_path) if profile_path else self.get_default_profile()
+        self.profile = self.load_profile(profile_path) if profile_path else self.get_default_profile_from_server()
         self.connect_to_server()
+        self.audio_thread = None
+        self.stop_audio = threading.Event()
+        pygame.mixer.init()
+        atexit.register(self.cleanup)
 
-    def get_default_profile(self) -> Dict:
-        """Get the default profile configuration"""
-        return {
-            "tools": {
-                "weather": True,
-                "wolfram_alpha": True
-            },
-            "personality": {
-                "system_prompt": "You are a helpful assistant with access to various data sources and computational capabilities. You can provide information on a wide range of topics and perform calculations. Always strive to give accurate and up-to-date information."
+    def get_default_profile_from_server(self) -> Dict:
+        """Get the default profile configuration from the server"""
+        try:
+            response = requests.get(f"{self.base_url}/default_profile")
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            console.print(f"[bold red]Error fetching default profile from server: {str(e)}[/bold red]")
+            console.print("[bold yellow]Using a basic default profile[/bold yellow]")
+            return {
+                "tools": {
+                    "weather": True,
+                    "wolfram_alpha": True,
+                    "google_search": True,
+                    "play_music": True,
+                    "download_audio": True
+                },
+                "personality": {
+                    "system_prompt": "You are a helpful assistant."
+                }
             }
-        }
 
     def load_profile(self, profile_path: str) -> Dict:
         """Load and validate a profile from a JSON file"""
         try:
             if not os.path.exists(profile_path):
                 console.print(f"[bold red]Profile file not found: {profile_path}[/bold red]")
-                return self.get_default_profile()
+                return self.get_default_profile_from_server()
 
             with open(profile_path, 'r') as f:
                 profile = json.load(f)
@@ -54,7 +72,7 @@ class ChatInterface:
                     raise ValueError("Profile personality must contain a 'system_prompt'")
                 
                 # Merge with defaults to ensure all required fields exist
-                default_profile = self.get_default_profile()
+                default_profile = self.get_default_profile_from_server()
                 default_profile["tools"].update(profile.get("tools", {}))
                 default_profile["personality"].update(profile.get("personality", {}))
                 
@@ -65,8 +83,8 @@ class ChatInterface:
         except Exception as e:
             console.print(f"[bold red]Error loading profile: {str(e)}[/bold red]")
         
-        console.print("[bold yellow]Using default profile settings[/bold yellow]")
-        return self.get_default_profile()
+        console.print("[bold yellow]Using default profile settings from server[/bold yellow]")
+        return self.get_default_profile_from_server()
 
     def connect_to_server(self) -> None:
         """Send a connection request to the server"""
@@ -78,6 +96,55 @@ class ChatInterface:
                 console.print(f"[bold yellow]Received unexpected status code: {response.status_code}[/bold yellow]")
         except requests.exceptions.ConnectionError:
             console.print("[bold red]Warning: Cannot connect to server. Make sure it's running on http://localhost:5000[/bold red]")
+
+    def cleanup(self):
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.stop_audio.set()
+            self.audio_thread.join()
+        self.pause_music()
+        self.disconnect_from_server()
+
+    def disconnect_from_server(self):
+        try:
+            requests.post(f"{self.base_url}/disconnect")
+            console.print("[bold green]Successfully disconnected from the OpenAssistant server![/bold green]")
+        except requests.exceptions.RequestException:
+            console.print("[bold red]Failed to disconnect from the server.[/bold red]")
+
+    def stream_audio(self, stream_url):
+        try:
+            response = requests.get(f"{self.base_url}{stream_url}", stream=True)
+            response.raise_for_status()
+            
+            buffer = io.BytesIO()
+            for chunk in response.iter_content(chunk_size=4096):
+                buffer.write(chunk)
+                if self.stop_audio.is_set():
+                    break
+            
+            if not self.stop_audio.is_set():
+                buffer.seek(0)
+                pygame.mixer.music.load(buffer)
+                pygame.mixer.music.play()
+                
+                while pygame.mixer.music.get_busy() and not self.stop_audio.is_set():
+                    pygame.time.Clock().tick(10)
+        except requests.exceptions.RequestException as e:
+            console.print(f"[bold red]Error streaming audio: {str(e)}[/bold red]")
+
+    def play_music(self, stream_url):
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.stop_audio.set()
+            self.audio_thread.join()
+        
+        self.stop_audio.clear()
+        self.audio_thread = threading.Thread(target=self.stream_audio, args=(stream_url,))
+        self.audio_thread.start()
+
+    def pause_music(self):
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.pause()
+            console.print("[bold yellow]Music paused.[/bold yellow]")
 
     def send_message(self, message: str) -> str:
         """Send a message to the server and process the response"""
@@ -119,8 +186,13 @@ class ChatInterface:
                             buffer += f"\n{summary}\n"
                         assistant_message = buffer
                     elif chunk_data.get('type') == 'content':
+                        content = chunk_data.get('text', '')
+                        if 'stream_url' in content:
+                            audio_data = json.loads(content)
+                            if audio_data['status'] == 'success':
+                                self.play_music(audio_data['stream_url'])
                         if not search_mode:
-                            buffer += chunk_data.get('text', '')
+                            buffer += content
                             assistant_message = buffer
                 except json.JSONDecodeError:
                     console.print(f"[bold yellow]Warning: Invalid JSON received: {line}[/bold yellow]")
@@ -179,26 +251,29 @@ class ChatInterface:
         # Display profile configuration
         self.display_profile_info()
         
-        while True:
-            try:
-                user_input = console.input("[bold green]You: [/bold green]")
-                
-                if user_input.lower() == 'exit':
-                    break
-                
-                self.display_message("User", user_input)
-                self.conversation.append({"role": "user", "content": user_input})
-                
-                assistant_response = self.send_message(user_input)
-                if assistant_response:
-                    self.conversation.append({"role": "assistant", "content": assistant_response})
+        try:
+            while True:
+                try:
+                    user_input = console.input("[bold green]You: [/bold green]")
+                    
+                    if user_input.lower() == 'exit':
+                        break
+                    
+                    self.display_message("User", user_input)
+                    self.conversation.append({"role": "user", "content": user_input})
+                    
+                    assistant_response = self.send_message(user_input)
+                    if assistant_response:
+                        self.conversation.append({"role": "assistant", "content": assistant_response})
 
-            except KeyboardInterrupt:
-                console.print("\n[bold red]Chat interrupted by user.[/bold red]")
-                break
-            except Exception as e:
-                console.print(f"[bold red]An unexpected error occurred: {str(e)}[/bold red]")
-                continue
+                except KeyboardInterrupt:
+                    console.print("\n[bold red]Chat interrupted by user.[/bold red]")
+                    break
+                except Exception as e:
+                    console.print(f"[bold red]An unexpected error occurred: {str(e)}[/bold red]")
+                    continue
+        finally:
+            self.cleanup()
 
         console.print("[bold orange]Thank you for chatting![/bold orange]")
 
