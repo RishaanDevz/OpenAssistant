@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, jsonify, send_file
 import json
 import requests
 import wolframalpha
@@ -13,10 +13,12 @@ import random
 from rich import print
 from rich.console import Console
 from rich.panel import Panel
+import pygame
 from rich.text import Text
 import threading
-from werkzeug.serving import run_simple  # Add this import
-
+from werkzeug.serving import run_simple
+import yt_dlp
+import io
 
 load_dotenv()
 
@@ -30,6 +32,18 @@ WOLFRAM_ALPHA_APP_ID = os.getenv('WOLFRAM_ALPHA_APP_ID')
 google_service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
 
 wolfram_client = wolframalpha.Client(WOLFRAM_ALPHA_APP_ID)
+
+pygame.mixer.init()
+
+
+def get_music_files():
+    """Read the file names in the 'music' directory"""
+    music_dir = "music"
+    if os.path.exists(music_dir) and os.path.isdir(music_dir):
+        music_files = [f for f in os.listdir(music_dir) if os.path.isfile(os.path.join(music_dir, f))]
+        return music_files
+    return []
+
 
 def get_current_weather(location, unit="celsius"):
     """Get the current weather in a given location using the Open-Meteo API"""
@@ -96,6 +110,62 @@ def query_wolfram_alpha(query):
         return next(res.results).text
     except StopIteration:
         return "No results found"
+
+def get_song_path(song_name):
+    music_dir = "music"
+    music_files = get_music_files()
+    song_file = next((f for f in music_files if f.lower() == song_name.lower()), None)
+    return os.path.join(music_dir, song_file) if song_file else None
+
+
+
+def play_music(song_name):
+    song_path = get_song_path(song_name)
+    if song_path:
+        return json.dumps({
+            "status": "success",
+            "message": f"Now playing: {song_name}",
+            "stream_url": f"/stream_audio/{song_name}"
+        })
+    return json.dumps({
+        "status": "error",
+        "message": f"Song '{song_name}' not found in the music directory."
+    })
+    
+def pause_music():
+    return json.dumps({
+        "status": "success",
+        "message": "Music paused."
+    })
+def download_audio(url, output_folder="music"):
+    # Ensure output folder exists
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # yt-dlp options for extracting audio in MP3 format
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'{output_folder}/%(title)s.%(ext)s',
+        'postprocessors': [
+            {
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            },
+            {
+                'key': 'FFmpegMetadata'  # Adds metadata tags if available
+            }
+        ],
+        'noplaylist': True,  # Download only the single video
+    }
+
+    # Download and convert to MP3
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=True)
+            return f"Successfully downloaded: {info['title']}"
+        except Exception as e:
+            return f"Error downloading audio: {str(e)}"
+
 
 def summarize_tool_result(tool_name: str, result: str, original_query: str) -> str:
     """Use the LLM to summarize tool results in a natural way"""
@@ -215,7 +285,64 @@ def get_available_tools(profile):
             }
         })
     
+    if profile["tools"].get("play_music", True):
+        available_tools.append({
+            "type": "function",
+            "function": {
+                "name": "play_music",
+                "description": "Play a song from the user's music directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "song_name": {
+                            "type": "string",
+                            "description": "The name of the song to play"
+                        }
+                    },
+                    "required": ["song_name"]
+                }
+            }
+        })
+        
+        available_tools.append({
+            "type": "function",
+            "function": {
+                "name": "pause_music",
+                "description": "Pause the currently playing music",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "confirmation": {
+                            "type": "boolean",
+                            "description": "Confirmation to pause the music (always true)"
+                        }
+                    },
+                    "required": []
+                }
+            }
+        })
+    
+    if profile["tools"].get("download_audio", True):
+        available_tools.append({
+            "type": "function",
+            "function": {
+                "name": "download_audio",
+                "description": "Download audio from a YouTube video and save it to the music directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The YouTube video URL"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
+        })
+    
     return available_tools
+
 
 def get_default_profile():
     """Get the default profile configuration"""
@@ -223,13 +350,23 @@ def get_default_profile():
     formatted_date = current_time.strftime("%A, %B %d, %Y")
     formatted_time = current_time.strftime("%I:%M %p")
     
+    music_files = get_music_files()
+    music_list = f"The user's music directory contains the following files: {', '.join(music_files)}" if music_files else "The user's music directory is empty or not found."
+    
     return {
         "tools": {
             "weather": True,
-            "wolfram_alpha": True
+            "wolfram_alpha": True,
+            "google_search": True,
+            "play_music": True,
+            "download_audio": True  # Add the new tool to the default profile
         },
         "personality": {
-            "system_prompt": f"You are a helpful assistant with access to various data sources and computational capabilities. You can provide information on a wide range of topics and perform calculations. Always strive to give accurate and up-to-date information. The current time is {formatted_time} and the date is {formatted_date}."
+            "system_prompt": f"""You are a helpful assistant with access to various data sources and computational capabilities. You can provide information on a wide range of topics, perform calculations, and even download audio from YouTube videos. Always strive to give accurate and up-to-date information. The current time is {formatted_time} and the date is {formatted_date}.
+
+{music_list}
+
+You have been provided with this information about the user's music directory. You can play songs from this list when asked. If a user asks to play a song, use the play_music function with the song name. If a user wants to download a song from YouTube, use the download_audio function with the video URL."""
         }
     }
 
@@ -274,7 +411,7 @@ def generate_response(messages):
         if hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
             tool_call = chunk.choices[0].delta.tool_calls[0]
             current_tool_call = tool_call
-
+            
             # Handle weather tool call
             if tool_call.function.name == "get_current_weather" and profile["tools"].get("weather", True):
                 function_args = json.loads(tool_call.function.arguments)
@@ -302,6 +439,26 @@ def generate_response(messages):
                 )
 
                 final_result_buffer.append(summary)
+
+            # Handle play_music tool call
+            elif tool_call.function.name == "play_music" and profile["tools"].get("play_music", True):
+                function_args = json.loads(tool_call.function.arguments)
+                song_name = function_args.get('song_name')
+                if song_name:
+                    play_result = play_music(song_name)
+                    final_result_buffer.append(play_result)
+
+            # Handle pause_music tool call
+            elif tool_call.function.name == "pause_music" and profile["tools"].get("play_music", True):
+                pause_result = pause_music()
+                final_result_buffer.append(pause_result)
+
+            # Handle download_audio tool call
+            elif tool_call.function.name == "download_audio" and profile["tools"].get("download_audio", True):
+                function_args = json.loads(tool_call.function.arguments)
+                url = function_args['url']
+                download_result = download_audio(url)
+                final_result_buffer.append(download_result)
 
             # Handle Google Search tool call
             elif tool_call.function.name == "google_search" and profile["tools"].get("google_search", True):
@@ -373,6 +530,22 @@ def display_startup_messages():
 def client_connect():
     print("[bold blue]Client Connected![/bold blue]")
     return {"status": "connected"}, 200
+
+@app.route('/default_profile', methods=['GET'])
+def get_default_profile_route():
+    return jsonify(get_default_profile())
+
+@app.route('/disconnect', methods=['POST'])
+def client_disconnect():
+    print("[bold blue]Client Disconnected![/bold blue]")
+    return {"status": "disconnected"}, 200
+
+@app.route('/stream_audio/<song_name>')
+def stream_audio(song_name):
+    song_path = get_song_path(song_name)
+    if song_path:
+        return send_file(song_path, mimetype="audio/mpeg")
+    return "Song not found", 404
 
 @app.route('/generate', methods=['POST'])
 def generate():
