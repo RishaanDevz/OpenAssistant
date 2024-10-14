@@ -4,7 +4,7 @@ Welcome to OpenAssistant, an advanced AI-powered chat interface with customizabl
 
 ## Overview 🌟
 
-OpenAssistant is an open-source, flexible AI assistant platform designed to provide intelligent responses, perform calculations, and access various data sources. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces. It is optimized to use free models such as Gemini, so anyone can easily and quickly deploy this assistant in their homes.
+OpenAssistant is my vision of an open-source, flexible AI assistant platform. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces. It is optimized to use free models such as Gemini, so anyone can easily and quickly deploy this assistant in their homes.
 
 ## Endpoints 🔌
 
