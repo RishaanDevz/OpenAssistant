@@ -4,14 +4,17 @@ from rich.markdown import Markdown
 from rich import box
 from rich.live import Live
 import requests
+import pyaudio
+import wave
+import io
+import threading
 from typing import Dict, List
 import json
 import argparse
 import os
-import pygame
-import io
-import threading
+from pydub import AudioSegment
 import atexit
+import signal
 
 console = Console()
 
@@ -21,10 +24,15 @@ class ChatInterface:
         self.base_url = 'http://localhost:5000'
         self.profile = self.load_profile(profile_path) if profile_path else self.get_default_profile_from_server()
         self.connect_to_server()
+        self.audio_stream = None
         self.audio_thread = None
-        self.stop_audio = threading.Event()
-        pygame.mixer.init()
-        atexit.register(self.cleanup)
+        atexit.register(self.disconnect_from_server)
+        signal.signal(signal.SIGINT, self.signal_handler)  # Register the signal handler for Ctrl+C
+
+    def signal_handler(self, signal, frame):
+        """Handle the Ctrl+C signal"""
+        self.cleanup()
+        exit(0)
 
     def get_default_profile_from_server(self) -> Dict:
         """Get the default profile configuration from the server"""
@@ -38,10 +46,7 @@ class ChatInterface:
             return {
                 "tools": {
                     "weather": True,
-                    "wolfram_alpha": True,
-                    "google_search": True,
-                    "play_music": True,
-                    "download_audio": True
+                    "wolfram_alpha": True
                 },
                 "personality": {
                     "system_prompt": "You are a helpful assistant."
@@ -97,54 +102,60 @@ class ChatInterface:
         except requests.exceptions.ConnectionError:
             console.print("[bold red]Warning: Cannot connect to server. Make sure it's running on http://localhost:5000[/bold red]")
 
-    def cleanup(self):
-        if self.audio_thread and self.audio_thread.is_alive():
-            self.stop_audio.set()
-            self.audio_thread.join()
-        self.pause_music()
-        self.disconnect_from_server()
-
-    def disconnect_from_server(self):
-        try:
-            requests.post(f"{self.base_url}/disconnect")
-            console.print("[bold green]Successfully disconnected from the OpenAssistant server![/bold green]")
-        except requests.exceptions.RequestException:
-            console.print("[bold red]Failed to disconnect from the server.[/bold red]")
-
-    def stream_audio(self, stream_url):
-        try:
-            response = requests.get(f"{self.base_url}{stream_url}", stream=True)
-            response.raise_for_status()
-            
-            buffer = io.BytesIO()
-            for chunk in response.iter_content(chunk_size=4096):
-                buffer.write(chunk)
-                if self.stop_audio.is_set():
-                    break
-            
-            if not self.stop_audio.is_set():
-                buffer.seek(0)
-                pygame.mixer.music.load(buffer)
-                pygame.mixer.music.play()
-                
-                while pygame.mixer.music.get_busy() and not self.stop_audio.is_set():
-                    pygame.time.Clock().tick(10)
-        except requests.exceptions.RequestException as e:
-            console.print(f"[bold red]Error streaming audio: {str(e)}[/bold red]")
-
-    def play_music(self, stream_url):
-        if self.audio_thread and self.audio_thread.is_alive():
-            self.stop_audio.set()
-            self.audio_thread.join()
+    def stop_audio_stream(self):
+        """Stop the audio stream if it's running."""
+        if self.audio_stream:
+            try:
+                self.audio_stream.stop_stream()
+                self.audio_stream.close()
+            except OSError:
+                pass  # Ignore errors when stopping the stream
+            finally:
+                self.audio_stream = None
+            console.print("[bold red]Local audio stream stopped.[/bold red]")
         
-        self.stop_audio.clear()
-        self.audio_thread = threading.Thread(target=self.stream_audio, args=(stream_url,))
-        self.audio_thread.start()
+        # Only send the stop request to the server if we haven't already
+        if not hasattr(self, '_server_audio_stopped'):
+            try:
+                requests.post(f"{self.base_url}/stop_audio")
+                self._server_audio_stopped = True
+            except:
+                pass  # Ignore any errors if the server is already down
 
-    def pause_music(self):
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.pause()
-            console.print("[bold yellow]Music paused.[/bold yellow]")
+    def stream_audio(self, song_name):
+        def audio_streaming_thread():
+            chunk = 1024
+            url = f"{self.base_url}/stream_audio/{song_name}"
+            response = requests.get(url, stream=True)
+            
+            if response.status_code == 200:
+                p = pyaudio.PyAudio()
+                
+                # We'll determine the audio format from the first chunk
+                first_chunk = next(response.iter_content(chunk_size=chunk))
+                audio = AudioSegment.from_file(io.BytesIO(first_chunk), format="mp3")
+                
+                stream = p.open(format=p.get_format_from_width(audio.sample_width),
+                                channels=audio.channels,
+                                rate=audio.frame_rate,
+                                output=True)
+                
+                self.audio_stream = stream
+                
+                # Play the first chunk
+                stream.write(audio.raw_data)
+                
+                # Continue with the rest of the stream
+                for chunk in response.iter_content(chunk_size=chunk):
+                    if chunk:
+                        stream.write(chunk)
+                
+                stream.stop_stream()
+                stream.close()
+                p.terminate()
+
+        self.audio_thread = threading.Thread(target=audio_streaming_thread)
+        self.audio_thread.start()
 
     def send_message(self, message: str) -> str:
         """Send a message to the server and process the response"""
@@ -186,13 +197,8 @@ class ChatInterface:
                             buffer += f"\n{summary}\n"
                         assistant_message = buffer
                     elif chunk_data.get('type') == 'content':
-                        content = chunk_data.get('text', '')
-                        if 'stream_url' in content:
-                            audio_data = json.loads(content)
-                            if audio_data['status'] == 'success':
-                                self.play_music(audio_data['stream_url'])
                         if not search_mode:
-                            buffer += content
+                            buffer += chunk_data.get('text', '')
                             assistant_message = buffer
                 except json.JSONDecodeError:
                     console.print(f"[bold yellow]Warning: Invalid JSON received: {line}[/bold yellow]")
@@ -207,6 +213,17 @@ class ChatInterface:
                     )
                 )
         
+        # Add this block to handle audio playback
+        if "play_music" in assistant_message.lower():
+            song_name = assistant_message.split("Now playing: ")[-1].strip()
+            self.stream_audio(song_name)
+        elif "pause" in assistant_message.lower() or "resume" in assistant_message.lower():
+            if self.audio_stream:
+                if "pause" in assistant_message.lower():
+                    self.audio_stream.stop_stream()
+                else:
+                    self.audio_stream.start_stream()
+
         print()
         return assistant_message
 
@@ -243,6 +260,23 @@ class ChatInterface:
         console.print(f"[blue]Personality: {snippet}[/blue]")
         console.print()
 
+    def disconnect_from_server(self):
+        """Send a disconnect request to the server"""
+        try:
+            response = requests.post(f"{self.base_url}/disconnect")
+            if response.status_code == 200:
+                console.print("[bold green]Successfully disconnected from the OpenAssistant server![/bold green]")
+            else:
+                console.print(f"[bold yellow]Received unexpected status code on disconnect: {response.status_code}[/bold yellow]")
+        except requests.exceptions.RequestException as e:
+            console.print(f"[bold red]Error disconnecting from server: {str(e)}[/bold red]")
+
+    def cleanup(self):
+        """Clean up resources when the script is exiting"""
+        self.stop_audio_stream()
+        self.disconnect_from_server()
+        self._server_audio_stopped = False  # Reset the flag for potential future use
+
     def start(self) -> None:
         """Start the chat interface"""
         console.print("[bold red]Welcome to the OpenAssistant Chat Interface![/bold red]")
@@ -269,13 +303,9 @@ class ChatInterface:
                 except KeyboardInterrupt:
                     console.print("\n[bold red]Chat interrupted by user.[/bold red]")
                     break
-                except Exception as e:
-                    console.print(f"[bold red]An unexpected error occurred: {str(e)}[/bold red]")
-                    continue
         finally:
+            console.print("[bold orange]Thank you for chatting![/bold orange]")
             self.cleanup()
-
-        console.print("[bold orange]Thank you for chatting![/bold orange]")
 
 def main():
     """Main entry point for the chat interface"""
