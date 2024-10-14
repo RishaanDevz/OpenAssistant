@@ -1,12 +1,10 @@
 # OpenAssistant 🤖
 
-![OpenAssistant Logo](https://github.com/RishaanDevz/OpenAssistant/blob/main/Untitled%20design%20(12).png)
-
 Welcome to OpenAssistant, an advanced AI-powered chat interface with customizable profiles, extensible client support, and flexible model selection.
 
 ## Overview 🌟
 
-OpenAssistant is my vision of an open source, flexible AI assistant platform designed to provide intelligent responses, perform calculations, and access various data sources. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces. It is optimised to use free models such as Gemini or Groq, so anyone can easily and quickly deploy this assistant in their homes.
+OpenAssistant is an open-source, flexible AI assistant platform designed to provide intelligent responses, perform calculations, and access various data sources. It offers a customizable experience through user-defined profiles and supports the development of custom client interfaces. It is optimized to use free models such as Gemini, so anyone can easily and quickly deploy this assistant in their homes.
 
 ## Endpoints 🔌
 
@@ -24,6 +22,9 @@ Disconnects the client from the OpenAssistant server.
 
 ### 5. `/stream_audio/<song_name>` (GET)
 Streams audio for the specified song name.
+
+### 6. `/stop_audio` (POST)
+Stops the currently playing audio stream.
 
 ## Profiles 🎭
 
@@ -55,13 +56,13 @@ Follow these steps to set up and run OpenAssistant:
 
 1. Clone the repository:
    ```
-   git clone https://github.com/RishaanDevz/OpenAssistant.git
+   git clone https://github.com/YourUsername/OpenAssistant.git
    cd OpenAssistant
    ```
 
 2. Install the required Python libraries:
    ```
-   pip install flask requests wolframalpha google-api-python-client beautifulsoup4 python-dotenv litellm rich pygame yt-dlp
+   pip install flask requests wolframalpha google-api-python-client beautifulsoup4 python-dotenv litellm rich pygame yt-dlp pyaudio pydub
    ```
 
 3. Set up environment variables:
@@ -89,10 +90,10 @@ You can now interact with OpenAssistant through the chat interface!
 
 To use profiles, run:
 ```
-python chat.py --profile {filename}.json
+python chat.py --profile path/to/your/profile.json
 ```
 
-I've included some profiles, such as Captain Data, Jake from State Farm, and Alex the Fun Personal Assistant. You can create your own profiles by modifying the JSON files.
+You can create your own profiles by modifying the JSON files. The profile should include a `tools` object and a `personality` object with a `system_prompt`.
 
 ## Supported Models
 
@@ -102,14 +103,17 @@ For a full list of supported models and their configurations, please refer to th
 
 Note: Make sure you have the appropriate API keys set up in your `.env` file for the model you want to use.
 
-## New Features
+## Features
 
-- **Music Playback**: OpenAssistant can now play music from your local music directory.
-- **Audio Download**: You can download audio from YouTube videos directly through OpenAssistant.
-- **Improved Profile Handling**: The chat interface now supports loading custom profiles and fallback to server-provided default profiles.
-- **Audio Streaming**: Implemented audio streaming functionality for a smoother music playback experience.
-- **Enhanced Error Handling**: Better error messages and graceful error handling throughout the application.
-
+- **Intelligent Conversations**: Engage in dynamic conversations with the AI assistant.
+- **Music Playback**: Play music from your local music directory.
+- **Audio Download**: Download audio from YouTube videos directly through OpenAssistant.
+- **Weather Information**: Get current weather data for any location.
+- **Wolfram Alpha Integration**: Perform complex calculations and retrieve factual data.
+- **Google Search**: Search and summarize web content.
+- **Profile Customization**: Load custom profiles to tailor the assistant's capabilities and personality.
+- **Audio Streaming**: Stream audio for a smooth music playback experience.
+  
 ## Contributing
 
 Contributions to OpenAssistant are welcome! Feel free to submit pull requests or open issues for bugs and feature requests.
