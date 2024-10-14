@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, stream_with_context, jsonify, send_file
+from flask import Flask, request, Response, stream_with_context, jsonify
 import json
 import requests
 import wolframalpha
@@ -18,6 +18,9 @@ from rich.text import Text
 import threading
 from werkzeug.serving import run_simple
 import yt_dlp
+import pyaudio
+import wave
+from pydub import AudioSegment
 import io
 
 load_dotenv()
@@ -34,6 +37,11 @@ google_service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
 wolfram_client = wolframalpha.Client(WOLFRAM_ALPHA_APP_ID)
 
 pygame.mixer.init()
+
+# Modify these global variables
+audio_thread = None
+audio_stream = None
+audio_paused = threading.Event()
 
 
 def get_music_files():
@@ -111,32 +119,101 @@ def query_wolfram_alpha(query):
     except StopIteration:
         return "No results found"
 
-def get_song_path(song_name):
-    music_dir = "music"
-    music_files = get_music_files()
-    song_file = next((f for f in music_files if f.lower() == song_name.lower()), None)
-    return os.path.join(music_dir, song_file) if song_file else None
+def audio_streaming_thread(filename):
+    global audio_stream, audio_thread
+    chunk = 1024
+    
+    try:
+        audio = AudioSegment.from_file(filename)
+        raw_data = audio.raw_data
+        
+        p = pyaudio.PyAudio()
+        stream = p.open(format=p.get_format_from_width(audio.sample_width),
+                        channels=audio.channels,
+                        rate=audio.frame_rate,
+                        output=True)
+        
+        audio_stream = stream
+        
+        offset = 0
+        while offset < len(raw_data) and audio_stream:
+            if not audio_paused.is_set():
+                chunk_data = raw_data[offset:offset+chunk]
+                stream.write(chunk_data)
+                offset += chunk
+            else:
+                time.sleep(0.1)
+        
+        if audio_stream:
+            stream.stop_stream()
+            stream.close()
+        p.terminate()
+    except Exception as e:
+        print(f"Error in audio streaming: {str(e)}")
+    finally:
+        audio_stream = None
+        audio_thread = None
 
-
+@app.route('/stream_audio/<song_name>')
+def stream_audio(song_name):
+    print(f"Streaming audio requested for song: {song_name}")
+    def generate():
+        music_dir = "music"
+        song_path = os.path.join(music_dir, song_name)
+        if not os.path.exists(song_path):
+            print(f"Song file not found: {song_path}")
+            yield b''
+            return
+        
+        print(f"Starting to stream: {song_path}")
+        try:
+            audio = AudioSegment.from_file(song_path)
+            raw_data = audio.raw_data
+            chunk_size = 1024
+            
+            for i in range(0, len(raw_data), chunk_size):
+                yield raw_data[i:i+chunk_size]
+        except Exception as e:
+            print(f"Error streaming audio: {str(e)}")
+            yield b''
+    
+    return Response(generate(), mimetype="audio/mpeg")
 
 def play_music(song_name):
-    song_path = get_song_path(song_name)
-    if song_path:
-        return json.dumps({
-            "status": "success",
-            "message": f"Now playing: {song_name}",
-            "stream_url": f"/stream_audio/{song_name}"
-        })
-    return json.dumps({
-        "status": "error",
-        "message": f"Song '{song_name}' not found in the music directory."
-    })
+    global audio_thread, audio_paused
+    print(f"Play music requested for song: {song_name}")
+    music_dir = "music"
+    music_files = get_music_files()
     
+    song_file = next((f for f in music_files if f.lower() == song_name.lower()), None)
+    
+    if song_file:
+        song_path = os.path.join(music_dir, song_file)
+        print(f"Found song file: {song_path}")
+        
+        # Stop any currently playing audio
+        stop_audio_stream()
+        
+        audio_paused.clear()
+        audio_thread = threading.Thread(target=audio_streaming_thread, args=(song_path,))
+        audio_thread.start()
+        return f"Now playing: {song_file}"
+    else:
+        print(f"Song '{song_name}' not found in the music directory.")
+        return f"Song '{song_name}' not found in the music directory."
+
 def pause_music():
-    return json.dumps({
-        "status": "success",
-        "message": "Music paused."
-    })
+    global audio_paused
+    if audio_stream:
+        if audio_paused.is_set():
+            audio_paused.clear()
+            return "Music resumed."
+        else:
+            audio_paused.set()
+            return "Music paused."
+    else:
+        return "No music is currently playing."
+
 def download_audio(url, output_folder="music"):
     # Ensure output folder exists
     os.makedirs(output_folder, exist_ok=True)
@@ -507,22 +584,6 @@ def display_startup_messages():
         status.update("[bold magenta]Solving Artificial Intelligence", spinner="bouncingBall")
         time.sleep(1.5)
     
-    funny_messages = [
-        "Teaching AI to laugh at dad jokes",
-        "Untangling neural networks",
-        "Polishing the crystal ball",
-        "Feeding the quantum hamsters",
-        "Debugging the universe",
-        "Recalibrating the flux capacitor",
-        "Aligning the digital chakras",
-        "Upgrading common sense module"
-    ]
-    
-    for _ in range(3):
-        message = random.choice(funny_messages)
-        console.print(Panel(Text(message, style="bold cyan"), border_style="green"))
-        time.sleep(1)
-    
     server_url = "http://127.0.0.1:5000"
     console.print(Panel(f"[bold green]Started the OpenAssistant server at {server_url}![/bold green]\n[yellow]Start chat.py in another tab or connect your custom client![/yellow]", border_style="red"))
 
@@ -534,18 +595,6 @@ def client_connect():
 @app.route('/default_profile', methods=['GET'])
 def get_default_profile_route():
     return jsonify(get_default_profile())
-
-@app.route('/disconnect', methods=['POST'])
-def client_disconnect():
-    print("[bold blue]Client Disconnected![/bold blue]")
-    return {"status": "disconnected"}, 200
-
-@app.route('/stream_audio/<song_name>')
-def stream_audio(song_name):
-    song_path = get_song_path(song_name)
-    if song_path:
-        return send_file(song_path, mimetype="audio/mpeg")
-    return "Song not found", 404
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -573,8 +622,44 @@ def generate():
         mimetype='text/event-stream'
     )
 
+# Add this new route to main.py
+@app.route('/stop_audio', methods=['POST'])
+def stop_audio():
+    stop_audio_stream()
+    return {"status": "Audio stopped"}, 200
+
+# Modify the stop_audio_stream function
+def stop_audio_stream():
+    global audio_stream, audio_thread, audio_paused
+    if audio_stream:
+        try:
+            audio_stream.stop_stream()
+            audio_stream.close()
+        except OSError:
+            pass  # Ignore errors when stopping the stream
+        finally:
+            audio_stream = None
+    
+    if audio_thread:
+        audio_paused.set()
+        audio_thread.join(timeout=1)  # Wait for the thread to finish
+        audio_thread = None
+    
+    audio_paused.clear()
+    print("[bold red]Audio stream stopped.[/bold red]")
+
+@app.route('/disconnect', methods=['POST'])
+def disconnect():
+    stop_audio_stream()
+    # Add any other cleanup operations here
+    return {"status": "disconnected"}, 200
+
 def run_app():
-    run_simple('127.0.0.1', 5000, app, use_reloader=False, use_debugger=True)
+    try:
+        run_simple('127.0.0.1', 5000, app, use_reloader=False, use_debugger=True)
+    except KeyboardInterrupt:
+        print("[bold red]Server is shutting down...[/bold red]")
+        stop_audio_stream()  # Stop the audio stream on server shutdown
 
 if __name__ == '__main__':
     display_startup_messages()
