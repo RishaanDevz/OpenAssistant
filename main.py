@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, send_file
 import json
 import requests
 import wolframalpha
@@ -6,7 +6,6 @@ from googleapiclient.discovery import build
 from bs4 import BeautifulSoup
 from litellm import completion
 from dotenv import load_dotenv
-import os
 from datetime import datetime
 import time
 import random
@@ -19,19 +18,40 @@ import threading
 from werkzeug.serving import run_simple
 import yt_dlp
 import pyaudio
-import wave
-from pydub import AudioSegment
 import io
 import argparse
+import tempfile
+import asyncio
+import re
+import threading
+import queue
+from cartesia import Cartesia
+import pyaudio
+import tempfile
+import uuid
+import os
+import numpy as np
 
 load_dotenv()
 
 app = Flask(__name__)
 
+audio_streams = {}
+client = Cartesia(api_key=os.environ.get("CARTESIA_API_KEY"))
+voice_id = "87748186-23bb-4158-a1eb-332911b0b708"
+voice = client.voices.get(id=voice_id)
+model_id = "sonic-english"
+output_format = {
+    "container": "raw",
+    "encoding": "pcm_f32le",
+    "sample_rate": 44100,
+}
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 WOLFRAM_ALPHA_APP_ID = os.getenv("WOLFRAM_ALPHA_APP_ID")
+
 
 google_service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
 
@@ -78,6 +98,7 @@ def get_current_weather(location, unit="celsius"):
                 {
                     "location": location,
                     "temperature": "unknown",
+                    "condition": "unknown",
                     "error": f"No results found for {location}",
                 }
             )
@@ -86,12 +107,13 @@ def get_current_weather(location, unit="celsius"):
             {
                 "location": location,
                 "temperature": "unknown",
+                "condition": "unknown",
                 "error": f"Error in geocoding request: {response.status_code}",
             }
         )
 
     # Weather API endpoint
-    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true&weathercode=true"
 
     # Get current weather data
     response = requests.get(weather_url)
@@ -99,16 +121,33 @@ def get_current_weather(location, unit="celsius"):
         data = response.json()
         if "current_weather" in data and "temperature" in data["current_weather"]:
             temperature = data["current_weather"]["temperature"]
+            weather_code = data["current_weather"]["weathercode"]
 
             # Convert to Fahrenheit if requested
             if unit == "fahrenheit":
                 temperature = (temperature * 9 / 5) + 32
+
+            # Map weather code to condition
+            weather_conditions = {
+                0: "Clear sky",
+                1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                45: "Fog", 48: "Depositing rime fog",
+                51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+                61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+                71: "Slight snow fall", 73: "Moderate snow fall", 75: "Heavy snow fall",
+                77: "Snow grains",
+                80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+                85: "Slight snow showers", 86: "Heavy snow showers",
+                95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail"
+            }
+            condition = weather_conditions.get(weather_code, "Unknown")
 
             return json.dumps(
                 {
                     "location": location,
                     "temperature": round(temperature, 1),
                     "unit": unit,
+                    "condition": condition
                 }
             )
         else:
@@ -116,7 +155,8 @@ def get_current_weather(location, unit="celsius"):
                 {
                     "location": location,
                     "temperature": "unknown",
-                    "error": "Temperature data not found in the response",
+                    "condition": "unknown",
+                    "error": "Weather data not found in the response",
                 }
             )
     else:
@@ -124,6 +164,7 @@ def get_current_weather(location, unit="celsius"):
             {
                 "location": location,
                 "temperature": "unknown",
+                "condition": "unknown",
                 "error": f"Error in weather request: {response.status_code}",
             }
         )
@@ -176,32 +217,21 @@ def audio_streaming_thread(filename):
         audio_thread = None
 
 
-@app.route("/stream_audio/<song_name>")
-def stream_audio(song_name):
-    print(f"Streaming audio requested for song: {song_name}")
-
+@app.route('/stream_audio/<audio_id>')
+def stream_audio(audio_id):
     def generate():
-        music_dir = "music"
-        song_path = os.path.join(music_dir, song_name)
-        if not os.path.exists(song_path):
-            print(f"Song file not found: {song_path}")
-            yield b""
-            return
-
-        print(f"Starting to stream: {song_path}")
         try:
-            audio = AudioSegment.from_file(song_path)
-            raw_data = audio.raw_data
-            chunk_size = 1024
-
-            for i in range(0, len(raw_data), chunk_size):
-                yield raw_data[i : i + chunk_size]
+            output = audio_streams.get(audio_id)
+            if output:
+                for chunk in output:
+                    yield chunk['audio']
+                del audio_streams[audio_id]  # Clean up after streaming
         except Exception as e:
-            print(f"Error streaming audio: {str(e)}")
-            yield b""
+            print(f"Error streaming audio: {e}")
 
-    return Response(generate(), mimetype="audio/mpeg")
-
+    response = Response(generate(), mimetype="application/octet-stream")
+    response.headers['Content-Type'] = 'application/octet-stream'
+    return response
 
 def play_music(song_name):
     global audio_thread, audio_paused
@@ -223,7 +253,7 @@ def play_music(song_name):
             target=audio_streaming_thread, args=(song_path,)
         )
         audio_thread.start()
-        return f"Now playing: {song_file}"
+        return f"Now playing: {song_file}"  # This format is important for the UI to detect
     else:
         print(f"Song '{song_name}' not found in the music directory.")
         return f"Song '{song_name}' not found in the music directory."
@@ -495,14 +525,107 @@ def get_default_profile():
 
 {music_list}
 
-You have been provided with this information about the user's music directory. You can play songs from this list when asked. If a user asks to play a song, use the play_music function with the song name. If a user wants to download a song from YouTube, use the download_audio function with the video URL."""
+You have been provided with this information about the user's music directory. You can play songs from this list when asked. If a user asks to play a song, use the play_music function with the song name. If a user wants to download a song from YouTube, use the download_audio function with the video URL. If your response is longer than three sentences, use markdown formatting, and start it with a hashtag."""
         },
     }
+    
 
 
-def generate_response(messages):
+def split_into_sentences(text):
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [sentence.strip() for sentence in sentences if sentence.strip()]    
+
+def speak_text(text, audio_queue):
+    try:
+        cleaned_text = strip_markdown(text)
+        for output in client.tts.sse(
+            model_id=model_id,
+            transcript=cleaned_text,
+            voice_embedding=voice["embedding"],
+            stream=True,
+            output_format=output_format,
+        ):
+            audio_queue.put(output["audio"])
+    except Exception as e:
+        print(f"Error in speak_text: {e}")
+    finally:
+        audio_queue.put(None)  # Signal end of audio
+        
+def play_audio(audio_queue):
+    p = pyaudio.PyAudio()
+    stream = None
+    rate = 44100
+    try:
+        while True:
+            buffer = audio_queue.get()
+            if buffer is None:
+                if stream:
+                    stream.stop_stream()
+                    stream.close()
+                    stream = None
+                if audio_queue.empty():
+                    break
+                continue
+            if not stream:
+                stream = p.open(format=pyaudio.paFloat32, channels=1, rate=rate, output=True)
+            stream.write(buffer)
+    except Exception as e:
+        print(f"Error in play_audio: {e}")
+    finally:
+        if stream:
+            stream.stop_stream()
+            stream.close()
+        p.terminate()
+
+def strip_markdown(text):
+    # Remove bold and italic
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    
+    # Remove headers
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    
+    # Remove code blocks
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    
+    # Remove inline code
+    text = re.sub(r'`(.*?)`', r'\1', text)
+    
+    # Remove links
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+    
+    # Remove bullet points
+    text = re.sub(r'^\s*[-*+]\s', '', text, flags=re.MULTILINE)
+    
+    return text.strip()
+
+def process_tts(text):
+    if not text:
+        return None
+
+    try:
+        cleaned_text = strip_markdown(text)
+        output = client.tts.sse(
+            model_id=model_id,
+            transcript=cleaned_text,
+            voice_embedding=voice["embedding"],
+            output_format=output_format,
+            stream=True,
+        )
+        
+        # Generate a unique identifier for this audio stream
+        audio_id = str(uuid.uuid4())
+        
+        # Store the generator in a dictionary for later retrieval
+        audio_streams[audio_id] = output
+        
+        return audio_id
+    except Exception as e:
+        print(f"Error in process_tts: {e}")
+        return None
+        
+def generate_content(messages, profile):
     global CURRENT_MODEL
-    profile = request.json.get("profile", get_default_profile())
     available_tools = get_available_tools(profile)
 
     system_prompt = profile["personality"]["system_prompt"]
@@ -512,8 +635,7 @@ def generate_response(messages):
         formatted_time = current_time.strftime("%I:%M %p")
         system_prompt += f" The current time is {formatted_time} and the date is {formatted_date}. PLEASE ALWAYS USE CELSIUS FOR WEATHER UNLESS ASKED OTHERWISE. ALWAYS CALL ONE FUNCTION IN ANY RESPONSE"
 
-    system_message = {"role": "system", "content": system_prompt}
-    messages[0] = system_message
+    messages[0]["content"] = system_prompt
 
     response = completion(
         model=CURRENT_MODEL,
@@ -576,10 +698,16 @@ def generate_response(messages):
                 summary = summarize_tool_result("Google Search", search_result_json, query)
                 content += f"\n\n{summary}"
 
-        return json.dumps({"type": "content", "text": content}) + "\n"
-    else:
-        return json.dumps({"type": "content", "text": "No response generated."}) + "\n"
+        # First, yield the text content
+        yield json.dumps({"type": "content", "text": content}) + "\n"
 
+        # Then, process TTS and yield the audio_id
+        audio_id = process_tts(content)
+        if audio_id:
+            yield json.dumps({"type": "audio", "id": audio_id}) + "\n"
+
+    else:
+        yield json.dumps({"type": "content", "text": "No response generated."}) + "\n"
 
 def display_startup_messages():
     console = Console()
@@ -615,12 +743,12 @@ def client_connect():
 def get_default_profile_route():
     return jsonify(get_default_profile())
 
-
 @app.route("/generate", methods=["POST"])
 def generate():
     data = request.json
     message = data.get("message")
     conversation = data.get("conversation", [])
+    profile = data.get("profile", get_default_profile())
 
     if not message:
         return {"error": "No message provided"}, 400
@@ -637,9 +765,12 @@ def generate():
 
     messages = [system_message] + conversation + [{"role": "user", "content": message}]
 
-    return Response(
-        generate_response(messages), mimetype="text/event-stream"
-    )
+    def generate_response():
+        response = generate_content(messages, profile)
+        for item in response:
+            yield item
+
+    return Response(generate_response(), mimetype="text/event-stream")
 
 
 # Add this new route to main.py
@@ -651,31 +782,21 @@ def stop_audio():
 
 # Modify the stop_audio_stream function
 def stop_audio_stream():
-    global audio_stream, audio_thread, audio_paused
-    if audio_stream:
-        try:
-            audio_stream.stop_stream()
-            audio_stream.close()
-        except OSError:
-            pass  # Ignore errors when stopping the stream
-        finally:
-            audio_stream = None
-
-    if audio_thread:
-        audio_paused.set()
-        audio_thread.join(timeout=1)  # Wait for the thread to finish
-        audio_thread = None
-
-    audio_paused.clear()
+    # This function is now a placeholder, as the audio streaming is handled differently
     print("[bold red]Audio stream stopped.[/bold red]")
 
+async def close_cartesia_client():
+    await client.close()
 
 @app.route("/disconnect", methods=["POST"])
 def disconnect():
     stop_audio_stream()
-    # Add any other cleanup operations here
+    asyncio.run(close_cartesia_client())
     return {"status": "disconnected"}, 200
 
+@app.route('/')
+def serve_voice_assistant():
+    return send_file('main.html')
 
 def run_app():
     try:
